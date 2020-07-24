@@ -1,0 +1,406 @@
+---
+title: "BMI data clean and EDA"
+description: |
+  this note is for BMI data!
+author:
+  - name: Jixing Liu
+    url: https://jixing.netlify.com/
+    affiliation: 深圳妇幼
+date: "`r Sys.Date()`"
+#bibliography: biblio.bib  
+output:
+  radix::radix_article:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    self_contained: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+    echo = TRUE,      # Output code chunks
+    message = FALSE,  # Toggle off message output 
+    warning = FALSE,    # Toggle off warning output
+    fig.width = 6, fig.asp = 0.618, out.width = "70%", fig.align = "center") 
+
+knitr::opts_knit$set(root.dir = usethis::proj_path())
+library(docknitr)
+
+# libraries used in report
+library(knitr)
+library(kableExtra)
+library(tidyverse)
+
+theme_set(theme_light(base_family = "Avenir"))
+```
+## function
+
+```{r}
+na_x2na <- function (s, x = 0)
+{
+    sapply(s, function(y)
+        ifelse(y %in% x, NA, y))
+}
+
+time_calc <-
+  function(string) {
+    time_w_d <- string %>%
+      str_split("\\+") %>% unlist()  %>%
+      as.numeric()
+    time = time_w_d[1] * 7 + time_w_d[2]
+    return(time)
+  }
+```
+
+
+## Import Data
+```{r}
+library(readxl)
+raw_data <- read_excel("analysis/data/raw_data/BMI_2020-07-23.xlsx")
+
+```
+
+
+```{r}
+meta_data <- data.frame(
+  stringsAsFactors = FALSE,
+              note = c("病案号","末次月经","姓名","籍贯","民族",
+                       "文化程度","主要诊断","其他诊断",
+                       "HDP(0:血压正常，1GH，2PE，3重PE，4子痫，5慢高，6慢高并PE，7镜像)","GDM","FGR(1FGR","排除诊断","住院总费用",
+                       "住院天数","分娩孕周","类型（1早发，2晚发≥34周）","分娩方式","婴儿性别","婴儿分娩结果",
+                       "婴儿体重","SGA/LGA（正常0SGA1LGA2）","入住MICU",
+                       "入住NICU（0出院，1转科）","婴儿转归","婴儿抢救次数","1分钟APgar评分","5分钟Apgar评分","丈夫文化程度",
+                       "丈夫身高","丈夫体重","孕前身高（m)","孕前体重","孕前BMI",
+                       "WHO肥胖（0:＜18.4,1:18.5-24.9,2:25-29.9,3:≥30）",
+                       "中国肥胖标准（0＜18.4，1：18.5-23.9，2：24-27.9，3：28-31.9,4:32-36.9,5:≥37）","ALT","AST",
+                       "ALB（白蛋白）","TBA（总胆汁酸）","LDH","Cr","尿素","Uric尿酸",
+                       "APTT","PT","INR","ATIII","DD","纤维蛋白原","PLT"),
+               col = c("ID","last menstrual period",
+                       "name","native place","nation","Level of education",
+                       "principal diagnosis","Other diagnostic","HDP","GDM",
+                       "FGR","Exclude diagnosis","the in-patients costs",
+                       "Hospitalization days","Delivery gestational age","type",
+                       "Delivery way","A baby's sex","Baby delivery results",
+                       "The baby weight","SGA_LGA","Check-in MICU",
+                       "Check-in NICU","Infant outcome","Baby salvage number",
+                       "1 minute APgar score","5 minute APgar score",
+                       "Husband culture degree","Husband's height","Husband's weight",
+                       "Pregnancy height","Pregnancy weight","Pregnancy BMI",
+                       "WHO obesity","china obesity","ALT","AST","ALB","TBA","LDH",
+                       "Cr","BUN","Uric acid","APTT","PT","INR","ATIII",
+                       "DD","fibrinogen","PLT")
+)
+
+```
+
+
+```{r}
+colnames(raw_data) <- meta_data$col
+raw_data <- 
+  raw_data %>% janitor::clean_names()
+meta_data$col <- colnames(raw_data)
+
+```
+
+## 📌  select data
+
+```{r}
+select_cols <- 
+  c("id",
+  "pregnancy_bmi",
+  "pregnancy_height",
+  "pregnancy_weight",
+  "principal_diagnosis",
+  "other_diagnostic",
+  "delivery_gestational_age",
+  "type",
+  "delivery_way",
+  "the_baby_weight",
+  "check_in_nicu",
+  "x1_minute_a_pgar_score",
+  "x5_minute_a_pgar_score",
+  "fgr",
+  "alt",
+  "ast",
+  "alb",
+  "tba",
+  "ldh",
+  "cr",
+  "bun",
+  "uric_acid",
+  "aptt",
+  "pt",
+  "inr",
+  "atiii",
+  "dd",
+  "fibrinogen",
+  "plt")
+
+
+data <- 
+  raw_data %>% 
+  select(select_cols)
+
+```
+
+
+
+## 📌  Tidy Data
+
+
+### 转换变量
+```{r}
+data_tidy <- 
+  data %>%
+  # 重新计算 BMI ==============================
+  # 把标错单位的 cm 转成 m
+  mutate(pregnancy_height = if_else(
+    pregnancy_height >= 100,
+    pregnancy_height / 100,
+    pregnancy_height
+  )) %>% 
+  mutate(BMI = 
+         cchsflow::bmi_fun(pregnancy_height, pregnancy_weight)) %>%
+  select(-pregnancy_bmi, -pregnancy_height, -pregnancy_weight) %>%
+  # PE 表型 ==============================
+  mutate(total_diagnosis = str_c(principal_diagnosis, ", ", other_diagnostic)) %>% 
+  # 提取重度轻度字样
+  mutate(
+  PE_LH_type = 
+    total_diagnosis %>%
+    str_extract("重度|轻度") 
+  ) %>% 
+  # NA + 先兆子痫|子痫前期 = 轻度 
+  mutate(
+    PE_LH_type = 
+           if_else(is.na(PE_LH_type) & str_detect(total_diagnosis, "先兆子痫|子痫前期"),
+                   "轻度",
+                   PE_LH_type)
+  ) %>% 
+  # NA + 黑尔普综合征|胎儿生长发育迟缓 = 重度 
+  mutate(
+    PE_LH_type = 
+           if_else(is.na(PE_LH_type) & str_detect(total_diagnosis, "黑尔普综合征|胎儿生长发育迟缓"),
+                   "重度",
+                   PE_LH_type)
+    ) %>% 
+  select(-principal_diagnosis, -other_diagnostic, -total_diagnosis) %>% 
+  # 转换孕周为天 ==============================
+  mutate(delivery_gestational_age = 
+           if_else(str_detect(delivery_gestational_age, "\\+"), 
+                   time_calc(delivery_gestational_age),
+                   as.numeric(delivery_gestational_age) * 7)
+         ) %>% 
+  # 替代实验检查中的 0 为 缺失值 ==============================
+  mutate_at(
+    c(
+      "alt",
+      "ast",
+      "alb",
+      "tba",
+      "ldh",
+      "cr",
+      "bun",
+      "uric_acid",
+      "aptt",
+      "pt",
+      "inr",
+      "atiii",
+      "dd",
+      "fibrinogen",
+      "plt"
+    ),
+    ~ na_x2na(., x = 0)
+  ) %>% 
+  # 变量类型 ==============================
+  mutate(PE_LH_type = as_factor(PE_LH_type)) %>% 
+  mutate(check_in_nicu = if_else(check_in_nicu == 0, "出院", "转科") %>% as.factor()) %>% 
+  mutate(type = as_factor(type))  %>% 
+  mutate(delivery_way = as_factor(delivery_way)) %>% 
+  mutate(fgr = as_factor(fgr)) %>% 
+  mutate(the_baby_weight = as.numeric(the_baby_weight)/1000) 
+  
+```
+
+
+## Y 的正态分布
+
+
+## EDA
+
+```{r}
+#Explore Your Dataset
+library(tidyverse)
+df <- data_tidy
+#==== HEAD ====
+#==== DIM AND GLIMPSE ====
+dim(df)
+glimpse(df)
+
+library(skimr)
+skim(df)
+
+library(visdat)
+vis_miss(df)
+vis_dat(df)
+
+#==== CREATE_REPORT IN DATAEXPLORER ====
+library(DataExplorer)
+DataExplorer::create_report(df)
+```
+
+
+## Transform
+
+## 一般线性模型的假设
+
+1. 正态性: Y 变量要是正态分布 ✅   
+2. 独立性: 样本间独立, 没有重复
+3. 线性: Y 与 X 之间是线性的
+4. 同方差性: 因变量的方差不随自变量的水平不同而变化 ✅   
+
+
+## 多元回归的第一步最好检查一下变量间的相关性
+
+```{r}
+require(data.table)
+require(ggplot2)
+require(GGally)
+
+data_tidy %>%
+  select(BMI, PE_LH_type, type) %>%
+  ggpairs(columns = 1:2, mapping = aes(colour = type))
+
+```
+
+
+## 📌  想回答的问题
+
+基本建模形式: Y ~ BMI + Age + 初产
+
+###  PE 表型
+
+1. 早发型PE、晚发型PE
+2. 轻度PE、重度PE
+3. 早发重度、晚发重度
+
+#### 1. 早发型PE、晚发型PE
+```{r}
+data_tidy %>%
+  glm(type ~ BMI, data = ., family = binomial) %>% 
+  broom::tidy() %>% 
+  .[2, ] 
+```
+
+#### 2. 轻度PE、重度PE
+
+```{r}
+data_tidy %>%
+  glm(PE_LH_type ~ BMI, data = ., family = binomial) %>% 
+  broom::tidy() %>% 
+  .[2, ] 
+```
+
+
+#### 3.早发重度、晚发重度
+```{r}
+data_tidy %>%
+  filter(PE_LH_type == "重度") %>% 
+  glm(type ~ BMI, data = ., family = binomial) %>% 
+  broom::tidy() %>% 
+  .[2, ] 
+```
+
+
+### 妊娠结局
+
+1. 孕周
+2. 分娩方式
+3. 出生体重
+4. 小于胎龄儿
+5. 入住 NICU
+6. Apgar
+
+```{r}
+data_BMI_pregnancy <-
+  data_tidy %>%
+  mutate(BMI_group = if_else(BMI >= 30, "obesity", "no_obesity") %>% as.factor()) %>%
+  select(
+    c(
+      "delivery_gestational_age",
+      "delivery_way",
+      "the_baby_weight",
+      "check_in_nicu",
+      "x1_minute_a_pgar_score",
+      "x5_minute_a_pgar_score",
+      "BMI_group"
+    )
+  )
+data_BMI_pregnancy %>%
+  write_csv("analysis/data/derived_data/妊娠结局_BMI.csv")
+```
+
+```{r}
+
+ggpairs(
+  data_BMI_pregnancy %>% filter(!is.na(BMI_group)),
+  columns = 1:(ncol(data_BMI_pregnancy) - 1),
+  mapping = aes(colour = BMI_group)
+)
+
+```
+
+```{r}
+library(tidyverse)
+theme_set(theme_light())
+# with fill ==============================
+data_BMI_pregnancy %>%
+  filter(!is.na(BMI_group)) %>% 
+  {bind_cols(select_if(., is.numeric),
+             select_at(., "BMI_group"))
+  } %>%
+  gather(-BMI_group, key = "var", value = "value") %>%
+  ggplot(aes(x = value, fill = BMI_group)) + 
+  geom_density() +
+  facet_wrap(~ var, scales = "free") 
+```
+
+
+### 在重度 PE 中, 器官功能损伤
+
+1. 肝功能损伤
+2. 肾功能损伤
+3. PLT 减少
+4. HLD 升高
+5. 低蛋白血症
+
+```{r}
+data_tidy %>% 
+  filter(PE_LH_type == "重度") %>% 
+  mutate(BMI_group = if_else(BMI>= 30, "obesity", "no_obesity") %>% as.factor()) %>% 
+  select(c("fgr","alt","ast","alb","tba","ldh","cr","bun","uric_acid","aptt","pt","inr","atiii","dd","fibrinogen","plt", "BMI_group")) %>% 
+  write_csv("analysis/data/derived_data/重度 PE_器官功能_BMI.csv")
+```
+
+
+## 数据问题
+
+1. 两张表格用合并表格, 重度 PE 是是合并表格的子集 ✅   
+2. __age__ 和 __是否是初产妇__的变量没有
+3. BMI 要重新计算, 有些单位搞错了, 单位是 M, 弄成 cm ✅   
+4. FGA == FGR ✅   
+5. PE 表型要用正则表达式进行提取 ✅   
+
+## 几个小问题
+
+1. 婴儿抢救次数: null 与 0 是一样吗? __是的__
+2. 空白是缺失数据吗? __是的__
+3. 婴儿转归中的 / 是什么意思? __缺失数据__
+4. 孕前身高中的: 0 和小数 是什么意思? __0 是缺失, 小数是单位错误, m 写成 cm __
+5. 孕前BMI 中的 0 与 0.00? 是什么意思 __数据缺失, 单位错误__
+6. 肥胖中的 / 是什么意思 __缺失__
+7. 实验室检查变量中的 0 是什么意思? __缺失__
+
+
+
+
