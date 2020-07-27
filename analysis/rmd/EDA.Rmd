@@ -110,9 +110,8 @@ select_cols <-
   "pregnancy_bmi",
   "pregnancy_height",
   "pregnancy_weight",
-  "principal_diagnosis",
-  "other_diagnostic",
   "delivery_gestational_age",
+  "hdp",
   "type",
   "delivery_way",
   "the_baby_weight",
@@ -163,28 +162,9 @@ data_tidy <-
          cchsflow::bmi_fun(pregnancy_height, pregnancy_weight)) %>%
   select(-pregnancy_bmi, -pregnancy_height, -pregnancy_weight) %>%
   # PE 表型 ==============================
-  mutate(total_diagnosis = str_c(principal_diagnosis, ", ", other_diagnostic)) %>% 
-  # 提取重度轻度字样
-  mutate(
-  PE_LH_type = 
-    total_diagnosis %>%
-    str_extract("重度|轻度") 
-  ) %>% 
-  # NA + 先兆子痫|子痫前期 = 轻度 
-  mutate(
-    PE_LH_type = 
-           if_else(is.na(PE_LH_type) & str_detect(total_diagnosis, "先兆子痫|子痫前期"),
-                   "轻度",
-                   PE_LH_type)
-  ) %>% 
-  # NA + 黑尔普综合征|胎儿生长发育迟缓 = 重度 
-  mutate(
-    PE_LH_type = 
-           if_else(is.na(PE_LH_type) & str_detect(total_diagnosis, "黑尔普综合征|胎儿生长发育迟缓"),
-                   "重度",
-                   PE_LH_type)
-    ) %>% 
-  select(-principal_diagnosis, -other_diagnostic, -total_diagnosis) %>% 
+  mutate(PE = 
+           if_else(hdp == 2, "轻度", "重度")) %>% 
+  select(-hdp) %>% 
   # 转换孕周为天 ==============================
   mutate(delivery_gestational_age = 
            if_else(str_detect(delivery_gestational_age, "\\+"), 
@@ -213,12 +193,14 @@ data_tidy <-
     ~ na_x2na(., x = 0)
   ) %>% 
   # 变量类型 ==============================
-  mutate(PE_LH_type = as_factor(PE_LH_type)) %>% 
+  mutate(PE = as_factor(PE)) %>% 
   mutate(check_in_nicu = if_else(check_in_nicu == 0, "出院", "转科") %>% as.factor()) %>% 
   mutate(type = as_factor(type))  %>% 
   mutate(delivery_way = as_factor(delivery_way)) %>% 
   mutate(fgr = as_factor(fgr)) %>% 
-  mutate(the_baby_weight = as.numeric(the_baby_weight)/1000) 
+  mutate(the_baby_weight = as.numeric(the_baby_weight)/1000) %>% 
+  mutate(x1_minute_a_pgar_score = if_else(x1_minute_a_pgar_score <= 3, "low", "high") %>% as.factor()) %>% 
+  mutate(x5_minute_a_pgar_score = if_else(x5_minute_a_pgar_score <= 3, "low", "high") %>% as.factor())
   
 ```
 
@@ -268,7 +250,7 @@ require(ggplot2)
 require(GGally)
 
 data_tidy %>%
-  select(BMI, PE_LH_type, type) %>%
+  select(BMI, PE, type) %>%
   ggpairs(columns = 1:2, mapping = aes(colour = type))
 
 ```
@@ -284,6 +266,18 @@ data_tidy %>%
 2. 轻度PE、重度PE
 3. 早发重度、晚发重度
 
+
+```{r}
+PE_pd <- 
+data_tidy %>% 
+  mutate(BMI_group = if_else(BMI>= 30, "obesity", "no_obesity") %>% as.factor()) %>% 
+  filter(!is.na(BMI_group)) %>% 
+  select(c("type", "PE", "BMI_group")) %>% 
+  rio::export("analysis/data/derived_data/PE_pd.xlsx")
+```
+
+
+
 #### 1. 早发型PE、晚发型PE
 ```{r}
 data_tidy %>%
@@ -296,7 +290,7 @@ data_tidy %>%
 
 ```{r}
 data_tidy %>%
-  glm(PE_LH_type ~ BMI, data = ., family = binomial) %>% 
+  glm(PE ~ BMI, data = ., family = binomial) %>% 
   broom::tidy() %>% 
   .[2, ] 
 ```
@@ -305,7 +299,7 @@ data_tidy %>%
 #### 3.早发重度、晚发重度
 ```{r}
 data_tidy %>%
-  filter(PE_LH_type == "重度") %>% 
+  filter(PE == "重度") %>% 
   glm(type ~ BMI, data = ., family = binomial) %>% 
   broom::tidy() %>% 
   .[2, ] 
@@ -324,7 +318,8 @@ data_tidy %>%
 ```{r}
 data_BMI_pregnancy <-
   data_tidy %>%
-  mutate(BMI_group = if_else(BMI >= 30, "obesity", "no_obesity") %>% as.factor()) %>%
+  mutate(BMI_group = if_else(BMI >= 30, "obesity", "no_obesity") %>% as.factor()) %>% 
+  filter(!is.na(BMI_group)) %>% 
   select(
     c(
       "delivery_gestational_age",
@@ -339,6 +334,11 @@ data_BMI_pregnancy <-
 data_BMI_pregnancy %>%
   write_csv("analysis/data/derived_data/妊娠结局_BMI.csv")
 ```
+
+
+
+
+
 
 ```{r}
 
@@ -375,11 +375,18 @@ data_BMI_pregnancy %>%
 5. 低蛋白血症
 
 ```{r}
+sPE_BMI <- 
 data_tidy %>% 
-  filter(PE_LH_type == "重度") %>% 
+  filter(PE == "重度") %>% 
   mutate(BMI_group = if_else(BMI>= 30, "obesity", "no_obesity") %>% as.factor()) %>% 
-  select(c("fgr","alt","ast","alb","tba","ldh","cr","bun","uric_acid","aptt","pt","inr","atiii","dd","fibrinogen","plt", "BMI_group")) %>% 
+  filter(!is.na(BMI_group)) %>% 
+  select(c("type", "fgr","alt","ast","alb","tba","ldh","cr","bun","uric_acid","aptt","pt","inr","atiii","dd","fibrinogen","plt", "BMI_group"))
+
+sPE_BMI %>% 
   write_csv("analysis/data/derived_data/重度 PE_器官功能_BMI.csv")
+
+sPE_BMI %>% 
+  rio::export("analysis/data/derived_data/重度 PE_器官功能_BMI.xlsx")
 ```
 
 
@@ -402,5 +409,45 @@ data_tidy %>%
 7. 实验室检查变量中的 0 是什么意思? __缺失__
 
 
+凝血指标: 
 
+凝血功能检测指标包括凝血酶原时间（Prothrombin time, PT）、活化部分凝血活酶时间（Activated partial thromboplatin time, APTT）、凝血酶时间（Thrombin time, TT）、纤维蛋白原（Fibrinogen, FIB）、凝血时间（Clotting time，CT）和国际标准化比值（International normalized ratio，INR）
+
+
+➤ PT-凝血酶原时间
+
+PT是指在血浆中加入组织因子（TF或组织凝血活酶）和Ca2+启动外源性凝血系统，观察血浆的凝固时间。PT是目前临床最常用的筛选试验之一，用于评价外源性凝血途径功能。正常参考值为10～14秒。
+
+➤ APTT-活化部分凝血活酶时间
+
+APTT是在血浆中加入XII因子活化剂、Ca2+、磷脂启动血浆内源性凝血途径，观察血浆凝固时间。APTT也是目前临床最常用的筛选试验之一，用于评价内源性凝血途径功能。正常参考值为32～43秒。
+
+➤ INR-国际标准化比值
+
+INR是受检患者的PT与正常对照PT之比的ISI次方（ISI是国际的敏感指数，试剂出厂时由厂家标定）。同一份血浆在不同的实验室，用不同的ISI试剂检测，PT值结果差异很大，但测得的INR值相同，这样使结果具有可比性。正常参考值为0.9～1.1。
+
+➤ TT-凝血酶时间
+
+TT是在血浆中加入标准凝血酶，检测凝血过程的第三个阶段，反映血浆内纤维蛋白原水平及血浆中肝素样物质的多少。正常参考值为16～18秒。
+
+➤ FIB-纤维蛋白原
+
+FIB是通过在受检血浆中加入一定量凝血酶，使血浆中的纤维蛋白原转变为纤维蛋白，通过比浊原理计算出纤维蛋白原的含量。正常参考值为2～4 g/L。
+
+➤ FDP-血浆纤维蛋白降解产物
+
+FDP是指在纤溶亢进时产生的纤溶酶的作用下，纤维蛋白或纤维蛋白原被分解后产生的降解产物的总称。正常参考值1～5 mg／L。
+
+➤ CT-凝血时间
+
+CT是指血液离开血管，在体外发生凝固的时间，主要是测定内源性凝血途径中各种凝血因子是否缺乏，功能是否正常，或者是否有抗凝物质增多。
+
+[【凝血指标那么多，到底要看哪一个？】-中华医学网](http://medline.org.cn/news/detail.do?newsId=12108)
+
+PT: 凝血酶原时间
+时间长代表低凝血状态?
+
+活化部分凝血活酶时间（APTT）
+
+INR: 0.8-1.5
 
